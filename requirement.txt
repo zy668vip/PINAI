@@ -1,10 +1,10 @@
 anyio
 httpx
 python-socks
-httpx-socks
+httpx-socks==0.8.1
 aiofiles
 cfcrawler
 ua-generator
 fake-useragent
-asynctinydb
+async-tinydb
 colorama
