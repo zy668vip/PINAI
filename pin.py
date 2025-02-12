@@ -196,22 +196,46 @@ class PIN_AI:
         return True
     
     async def check_in(self):
-        url = "https://prod-api.pinai.tech/task/checkin_data"
-        res = await self.http(url=url, headers=self.headers)
-        today_reward = res.json().get('tasks', [{}])[0].get('reward_points', {})
-        is_claim = res.json().get('tasks', [{}])[0].get('checkin_detail', {}).get('is_today_checkin')
-        if is_claim:
-            self.log(f"{yellow}already checkin today !")
-            return False
-        else:
-            url = "https://prod-api.pinai.tech/task/1001/v1/complete"
-            res = await self.http(url=url, headers=self.headers, data="")
-            if res.json().get("status") == "success":
-                self.log(f"{green}success checkin today,reward : {white}{today_reward}")
-                return True
-            else:
-                self.log(f"{red}failed checkin today !")
+        try:
+            url = "https://prod-api.pinai.tech/task/checkin_data"
+            res = await self.http(url=url, headers=self.headers)
+            
+            if not res.content:  # 检查响应是否为空
+                self.log(f"{yellow}Empty response when checking daily check-in status")
                 return False
+                
+            data = res.json()
+            today_reward = data.get('tasks', [{}])[0].get('reward_points', {})
+            is_claim = data.get('tasks', [{}])[0].get('checkin_detail', {}).get('is_today_checkin')
+            
+            if is_claim:
+                self.log(f"{yellow}already checkin today !")
+                return False
+            else:
+                url = "https://prod-api.pinai.tech/task/1001/v1/complete"
+                res = await self.http(url=url, headers=self.headers, data="")
+                
+                if not res.content:  # 检查响应是否为空
+                    self.log(f"{yellow}Empty response when completing check-in")
+                    return False
+                    
+                try:
+                    if res.json().get("status") == "success":
+                        self.log(f"{green}success checkin today,reward : {white}{today_reward}")
+                        return True
+                    else:
+                        self.log(f"{red}failed checkin today !")
+                        return False
+                except json.JSONDecodeError:
+                    self.log(f"{yellow}Invalid JSON response when completing check-in")
+                    return False
+                    
+        except json.JSONDecodeError:
+            self.log(f"{yellow}Invalid JSON response when checking daily check-in status")
+            return False
+        except Exception as e:
+            self.log(f"{red}Error during check-in: {str(e)}")
+            return False
     
     async def collect_coin(self, coin_type, coin_count):
         url = "https://prod-api.pinai.tech/home/collect"
