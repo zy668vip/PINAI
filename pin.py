@@ -248,11 +248,20 @@ class PIN_AI:
                     await countdown(random.randint(5, 10))
                     self.log(f"{green}complete {task_name} !")
                     claim_url = f"https://prod-api.pinai.tech/task/{task_id}/claim"
-                    res = await self.http(url=claim_url, headers=self.headers,data=json.dumps({}))
-                    if res.json().get("status") == "success":
-                        self.log(f"{green}{task_name} success claim {reward_points} points!")
-                    else:
-                        self.log(f"{red}{task_name} failed claim {reward_points} points!")
+                    try:
+                        res = await self.http(url=claim_url, headers=self.headers,data=json.dumps({}))
+                        if not res.content:  # 检查响应是否为空
+                            self.log(f"{yellow}Empty response when claiming {task_name}")
+                            continue
+                        
+                        status = res.json().get("status")
+                        if status == "success":
+                            self.log(f"{green}{task_name} success claim {reward_points} points!")
+                        else:
+                            self.log(f"{red}{task_name} failed claim {reward_points} points!")
+                    except json.JSONDecodeError:
+                        self.log(f"{yellow}Invalid JSON response when claiming {task_name}")
+                        continue
 
         random_task_url = "https://prod-api.pinai.tech/task/random_task_list"
         res = await self.http(url=random_task_url, headers=self.headers)
