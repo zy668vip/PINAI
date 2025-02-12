@@ -437,11 +437,6 @@ async def main():
         help=f"Perform customer input for data file (default: {data_file})",
     )
     arg.add_argument(
-        "--action",
-        "-A",
-        help="Function to directly enter the menu without displaying input",
-    )
-    arg.add_argument(
         "--proxy",
         "-P",
         default=proxy_file,
@@ -455,6 +450,7 @@ async def main():
     )
     arg.add_argument("--marin", action="store_true")
     args = arg.parse_args()
+
     if not await aiofiles.ospath.exists(args.data):
         async with aiofiles.open(args.data, "a") as w:
             pass
@@ -469,97 +465,44 @@ async def main():
                 "auto_task": True,
             }
             await w.write(json.dumps(_config, indent=4))
+
+    if not args.marin:
+        os.system("cls" if os.name == "nt" else "clear")
+    print(banner)
+
+    async with aiofiles.open(config_file) as r:
+        read = await r.read()
+        cfg = json.loads(read)
+        config = Config(
+            auto_checkin=cfg.get("auto_checkin"),
+            auto_collect=cfg.get("auto_collect"),
+            auto_task=cfg.get("auto_task"),
+        )
+
+    # Set up worker count
+    if not args.worker:
+        worker = int(os.cpu_count()-1)
+        if worker < 1:
+            worker = 1
+    else:
+        worker = int(args.worker)
+    
+    sema = asyncio.Semaphore(worker)
+
+    async def bound(sema, params):
+        async with sema:
+            return await PIN_AI(*params).start()
+
     while True:
-        if not args.marin:
-            os.system("cls" if os.name == "nt" else "clear")
-        print(banner)
-        async with aiofiles.open(config_file) as r:
-            read = await r.read()
-            cfg = json.loads(read)
-            config = Config(
-                auto_checkin=cfg.get("auto_checkin"),
-                auto_collect=cfg.get("auto_collect"),
-                auto_task=cfg.get("auto_task"),
-            )
-        datas, proxies = await get_data(data_file=args.data, proxy_file=args.proxy)
-        menu = f"""
-{white}data file :{green} {args.data}
-{white}proxy file :{green} {args.proxy}
-{green}total data :{white} {len(datas)}
-{green}total proxy :{white} {len(proxies)}
-
-    {green}1{white}.{green}) {white}set on/off auto checkin ({(green + "active" if config.auto_checkin else red + "non-active")})
-    {green}2{white}.{green}) {white}set on/off auto collect coin({(green + "active" if config.auto_collect else red + "non-active")})
-    {green}3{white}.{green}) {white}set on/off auto task({(green + "active" if config.auto_task else red + "non-active")})
-    {green}4{white}.{green}) {white}start bot (sync mode)
-    {green}5{white}.{green}) {white}start bot (multi-thread mode)
-        """
-        opt = None
-        if args.action:
-            opt = arg.action
-        else:
-            print(menu)
-            opt = input(f"{green}input number : {white}")
-            print(f"{white}~" * 50)
-        if opt == "1":
-            cfg["auto_checkin"] = False if config.auto_checkin else True
-            async with aiofiles.open(config_file, "w") as w:
-                await w.write(json.dumps(cfg, indent=4))
-            print(f"{green}success update auto_checkin config")
-            input(f"{blue}press enter to continue")
-            opt = None
-            continue
-        if opt == "2":
-            cfg["auto_collect"] = False if config.auto_collect else True
-            async with aiofiles.open(config_file, "w") as w:
-                await w.write(json.dumps(cfg, indent=4))
-            print(f"{green}success update auto_collect config !")
-            input(f"{blue}press enter to continue")
-            opt = None
-            continue
-        if opt == "3":
-            cfg["auto_task"] = False if config.auto_task else True
-            async with aiofiles.open(config_file, "w") as w:
-                await w.write(json.dumps(cfg, indent=4))
-            print(f"{green}success update auto_task config !")
-            input(f"{blue}press enter to continue")
-            opt = None
-            continue
-        if opt == "4":
-            while True:
-                datas, proxies = await get_data(args.data, args.proxy)
-                result = []
-                for no, data in enumerate(datas):
-                    res = await PIN_AI(
-                        id=no, query=data, proxies=proxies, config=config
-                    ).start()
-                    result.append(res)
-                await countdown(3600*3)
-        if opt == "5":
-            if not args.worker:
-                worker = int(os.cpu_count()-1)
-                if worker < 1:
-                    worker = 1
-            else:
-                worker = int(args.worker)
-            sema = asyncio.Semaphore(worker)
-
-            async def bound(sema, params):
-                async with sema:
-                    return await PIN_AI(*params).start()
-
-            while True:
-                datas, proxies = await get_data(args.data, args.proxy)
-                tasks = [
-                    asyncio.create_task(bound(sema, (no, data, proxies, config)))
-                    for no, data in enumerate(datas)
-                ]
-                result = await asyncio.gather(*tasks)
-                end = int(datetime.now().timestamp())
-                total = min(result) - end
-                await countdown(total)
-        if opt == None:
-            continue
+        datas, proxies = await get_data(args.data, args.proxy)
+        tasks = [
+            asyncio.create_task(bound(sema, (no, data, proxies, config)))
+            for no, data in enumerate(datas)
+        ]
+        result = await asyncio.gather(*tasks)
+        end = int(datetime.now().timestamp())
+        total = min(result) - end
+        await countdown(total)
 
 if __name__ == "__main__":
     try:
