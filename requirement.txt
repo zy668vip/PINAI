@@ -8,3 +8,4 @@ ua-generator
 fake-useragent
 async-tinydb
 colorama
+tinydb
