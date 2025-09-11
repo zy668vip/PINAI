@@ -16,7 +16,7 @@ from base64 import b64decode
 from datetime import datetime
 from urllib.parse import parse_qs
 from fake_useragent import UserAgent
-from asynctinydb import TinyDB, Query
+from tinydb import TinyDB, Query  # Change from asynctinydb to tinydb
 from colorama import init, Fore, Style
 from httpx_socks import AsyncProxyTransport
 
@@ -42,7 +42,7 @@ class Config:
 
 class PIN_AI:
     def __init__(self, id, query, proxies, config: Config):
-        self.db = TinyDB("db.json")
+        self.db = TinyDB("db.json")  # Change to synchronous TinyDB
         self.p = id
         self.query = query
         self.proxies = proxies
@@ -180,8 +180,19 @@ class PIN_AI:
             "init_data": self.query,
         }
         res = await self.http(auth_url, self.headers, json.dumps(data))
-        access_token = res.json().get("access_token")
-        refresh_token = res.json().get("refresh_token")
+        
+        # Check if response content is empty
+        if not res.content:
+            self.log(f"{red}Empty response when logging in")
+            return False
+        
+        try:
+            access_token = res.json().get("access_token")
+            refresh_token = res.json().get("refresh_token")
+        except json.JSONDecodeError:
+            self.log(f"{yellow}Invalid JSON response when logging in")
+            return False
+        
         if not access_token:
             message = res.json().get("message", "")
             if "signature is invalid" in message:
@@ -189,8 +200,9 @@ class PIN_AI:
                 return False
             self.log(f"{red}{message}, check log file http.log !")
             return False
+        
         uid = self.user.get("id")
-        await self.db.update({"access_token": access_token, "refresh_token": refresh_token}, Query().id == uid)
+        self.db.update({"access_token": access_token, "refresh_token": refresh_token}, Query().id == uid)
         self.log(f"{green}success get access token !")
         self.headers["authorization"] = f"Bearer {access_token}"
         return True
@@ -342,99 +354,111 @@ class PIN_AI:
                 return False
 
     async def start(self):
-        #随机等待1-10秒
         await countdown(random.randint(1, 10))
-        #如果数据无效，则返回当前时间戳+8小时
         if not self.valid:
             self.log(f"{red}data is invalid !")
             return int(datetime.now().timestamp())+(3600*8)
-        #主页数据
+
         home_url = "https://prod-api.pinai.tech/home"
-        #打印ip信息
         if len(self.proxies) > 0:
             await self.ipinfo()
-        #获取用户id
+
         uid = self.user.get("id")
-        #获取用户名
         first_name = self.user.get("first_name")
-        #获取用户姓
         last_name = self.user.get("last_name")
-        #获取用户数据
-        result = await self.db.search(Query().id == uid)
-        #如果用户数据不存在，则创建用户数据
+        
+        # Change async DB operations to sync
+        result = self.db.search(Query().id == uid)
         if len(result) == 0:
-            #创建默认用户数据
-            await self.db.insert(
-                {
-                    "id": uid,
-                    "first_name": first_name,
-                    "last_name": last_name,
-                    "access_token": None,
-                    "refresh_token": None,
-                    "pin_points_in_number": 0,
-                    "data_power": 0,
-                    "last_login": int(datetime.now().timestamp()),
-                }
-            )
-            result = await self.db.search(Query().id == uid)
-        #获取上次登录时间
+            self.db.insert({
+                "id": uid,
+                "first_name": first_name,
+                "last_name": last_name,
+                "access_token": None,
+                "refresh_token": None,
+                "pin_points_in_number": 0,
+                "data_power": 0,
+                "last_login": int(datetime.now().timestamp()),
+            })
+            result = self.db.search(Query().id == uid)
+
         last_login = result[0].get("last_login")
-        #打印用户信息
         self.log(f"{green}login as {first_name}{last_name} uid:{uid}")
-        #获取当前时间戳
         timestamp = int(datetime.now().timestamp())
-        #更新上次登录时间
-        await self.db.update({"last_login": timestamp}, Query().id == uid)
-        #打印上次登录时间
+        self.db.update({"last_login": timestamp}, Query().id == uid)  # Change to sync update
         self.log(f"{green}last login : {white}{datetime.fromtimestamp(last_login)}")
-        #获取access token
         access_token = result[0].get("access_token")
-        #获取access token是否过期
         expired = self.is_expired(access_token)
-        #如果access token过期，则重新登录
         if expired:
             self.log(f"{yellow}access token expired, renewing access token...")
             result = await self.login()
             if not result:
                 self.log(f"{red}failed to renew access token !")
-                #返回当前时间戳+300秒后重试
                 return int(datetime.now().timestamp())+300
         else:
             self.headers["authorization"] = f"Bearer {access_token}"
-        #如果自动签到，则签到
         if self.cfg.auto_checkin:
             await self.check_in()
-        #获取主页数据
-        res = await self.http(home_url, self.headers)
-        #获取PIN POINTS和DATA POWER
-        pin_points_in_number = res.json().get("pin_points_in_number", 0)
-        data_power = res.json().get("data_power", 0)
-        #更新用户数据
-        await self.db.update({"pin_points_in_number": pin_points_in_number}, Query().id == uid)
-        await self.db.update({"data_power": data_power}, Query().id == uid)
-        #打印PIN POINTS和DATA POWER
-        self.log(f"{green}PIN POINTS    : {white}{pin_points_in_number}")
-        self.log(f"{green}DATA POWER    : {white}{data_power}")
-        #如果自动收集硬币，则收集硬币
-        if self.cfg.auto_collect:
-            self.log(f"{green} Collecting coin...")
-            coin_list = [coin.get("type") for coin in res.json().get("coins")]
-            coin_count = [coin.get("count") for coin in res.json().get("coins")]
-            while any(coin_count):
-                for coin_type, count in zip(coin_list, coin_count):
-                    if count > 0:
-                        await self.collect_coin(coin_type=coin_type, coin_count=count)
-                        await countdown(random.randint(3, 10))
-                res = await self.http(home_url, self.headers)
-                coin_count = [coin.get("count") for coin in res.json().get("coins")]
-            self.log(f"{green}all coin collected !")
-        #如果自动任务，则执行任务
-        if self.cfg.auto_task:
-            self.log(f"{green} Start random task...")
-            await self.task()
-        #返回当前时间戳+4小时后重试
-        wait_period = int(datetime.now().timestamp())+3600*4
-        return round(wait_period)
+        try:
+            res = await self.http(home_url, self.headers)
+            if not res.content:
+                self.log(f"{red}Empty response from home page API!")
+                return int(datetime.now().timestamp()) + 300
+                
+            try:
+                home_data = res.json()
+            except json.JSONDecodeError:
+                self.log(f"{red}Invalid JSON response from home page API!")
+                return int(datetime.now().timestamp()) + 300
+
+            # Extract PIN points and data power with fallback values
+            pin_points_in_number = home_data.get("pin_points_in_number", 0)
+            data_power = home_data.get("data_power", 0)
+
+            # Update user data synchronously
+            self.db.update({"pin_points_in_number": pin_points_in_number}, Query().id == uid)
+            self.db.update({"data_power": data_power}, Query().id == uid)
+
+            # Print points and power
+            self.log(f"{green}PIN POINTS    : {white}{pin_points_in_number}")
+            self.log(f"{green}DATA POWER    : {white}{data_power}")
+
+            # Auto collect coins if enabled
+            if self.cfg.auto_collect:
+                self.log(f"{green} Collecting coin...")
+                coins = home_data.get("coins", [])
+                coin_list = [coin.get("type") for coin in coins]
+                coin_count = [coin.get("count") for coin in coins]
+                
+                while any(coin_count):
+                    for coin_type, count in zip(coin_list, coin_count):
+                        if count > 0:
+                            await self.collect_coin(coin_type=coin_type, coin_count=count)
+                            await countdown(random.randint(3, 10))
+                    
+                    # Refresh coin data
+                    res = await self.http(home_url, self.headers)
+                    try:
+                        updated_data = res.json()
+                        coins = updated_data.get("coins", [])
+                        coin_count = [coin.get("count") for coin in coins]
+                    except json.JSONDecodeError:
+                        self.log(f"{red}Failed to refresh coin data!")
+                        break
+                
+                self.log(f"{green}all coin collected !")
+
+            # Continue with auto task
+            if self.cfg.auto_task:
+                self.log(f"{green} Start random task...")
+                await self.task()
+
+            wait_period = int(datetime.now().timestamp()) + 3600*4
+            return round(wait_period)
+
+        except Exception as e:
+            self.log(f"{red}Error accessing home page: {str(e)}")
+            return int(datetime.now().timestamp()) + 300
         
 async def get_data(data_file, proxy_file):
     async with aiofiles.open(data_file) as w:
@@ -528,13 +552,41 @@ async def main():
 
     while True:
         datas, proxies = await get_data(args.data, args.proxy)
-        tasks = [
-            asyncio.create_task(bound(sema, (no, data, proxies, config)))
-            for no, data in enumerate(datas)
-        ]
-        result = await asyncio.gather(*tasks)
+        results = []
+        
+        # 串行执行每个账号，而不是并发执行
+        for no, data in enumerate(datas):
+            max_retries = 3
+            retry_count = 0
+            success = False
+            
+            while retry_count <= max_retries and not success:
+                if retry_count > 0:
+                    print(f"\n{yellow}账号 {no + 1} 第 {retry_count} 次重试，等待 60 秒...{reset}")
+                    await countdown(60)
+                    print()
+                
+                result = await bound(sema, (no, data, proxies, config))
+                
+                # 判断账号是否执行成功
+                current_time = int(datetime.now().timestamp())
+                time_diff = result - current_time
+                
+                # 如果返回时间距离当前时间超过1小时(3600秒)，说明执行成功
+                if time_diff > 3600:
+                    success = True
+                    print(f"\n{green}账号 {no + 1} 执行成功，立即执行下一个账号...{reset}")
+                    results.append(result)
+                else:
+                    retry_count += 1
+                    if retry_count <= max_retries:
+                        print(f"\n{red}账号 {no + 1} 执行失败，准备第 {retry_count} 次重试...{reset}")
+                    else:
+                        print(f"\n{red}账号 {no + 1} 执行失败，已达到最大重试次数 {max_retries}，跳过该账号...{reset}")
+                        results.append(result)  # 即使失败也要添加结果，避免影响总体循环
+        
         end = int(datetime.now().timestamp())
-        total = min(result) - end
+        total = min(results) - end
         await countdown(total)
 
 if __name__ == "__main__":
